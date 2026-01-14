@@ -66,13 +66,16 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
     // Execute command, return result even if exit code is non-zero
     private async safeExec(sprite: Sprite, command: string): Promise<{stdout: string; stderr: string; exitCode: number}> {
         try {
+            console.log(`Sprite safeExec: running "${command.substring(0, 50)}..."`);
             const result = await sprite.exec(command);
+            console.log(`Sprite safeExec: success`);
             return {
                 stdout: toStr(result.stdout),
                 stderr: toStr(result.stderr),
                 exitCode: 0
             };
         } catch (error: any) {
+            console.log(`Sprite safeExec: error - ${error.message}`);
             // Check if error has stdout/stderr (exec failed but returned output)
             if (error.stdout !== undefined || error.stderr !== undefined) {
                 return {
@@ -109,9 +112,11 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
 
         try {
             // Use test + stat to avoid errors on missing files
+            console.log(`Sprite stat: executing command for "${path}"`);
             const result = await this.safeExec(sprite,
                 `if [ -e "${path}" ]; then stat -c '%F|%s|%Y|%X' "${path}"; else echo "NOTFOUND"; fi`
             );
+            console.log(`Sprite stat: result for "${path}" - stdout="${result.stdout.trim()}", exitCode=${result.exitCode}`);
             const output = result.stdout.trim();
 
             if (output === 'NOTFOUND' || !output) {
@@ -134,6 +139,7 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
 
             return { type, ctime, mtime, size };
         } catch (error: any) {
+            console.log(`Sprite stat: caught error for "${path}" - ${error.message}`);
             if (error instanceof vscode.FileSystemError) {
                 throw error;
             }
