@@ -36,25 +36,27 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         return { spriteName, path };
     }
 
-    private async execWithRetry(sprite: Sprite, command: string, retries = 2): Promise<{stdout: string; stderr: string}> {
-        let lastError: any;
-        for (let i = 0; i <= retries; i++) {
-            try {
-                const result = await sprite.exec(command);
+    // Execute command, return result even if exit code is non-zero
+    private async safeExec(sprite: Sprite, command: string): Promise<{stdout: string; stderr: string; exitCode: number}> {
+        try {
+            const result = await sprite.exec(command);
+            return {
+                stdout: toStr(result.stdout),
+                stderr: toStr(result.stderr),
+                exitCode: 0
+            };
+        } catch (error: any) {
+            // Check if error has stdout/stderr (exec failed but returned output)
+            if (error.stdout !== undefined || error.stderr !== undefined) {
                 return {
-                    stdout: toStr(result.stdout),
-                    stderr: toStr(result.stderr)
+                    stdout: error.stdout ? toStr(error.stdout) : '',
+                    stderr: error.stderr ? toStr(error.stderr) : '',
+                    exitCode: error.exitCode || 1
                 };
-            } catch (error: any) {
-                lastError = error;
-                console.error(`Sprite exec attempt ${i + 1} failed:`, error.message);
-                if (i < retries) {
-                    // Wait a bit before retrying
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                }
             }
+            // Re-throw if it's a connection/websocket error
+            throw error;
         }
-        throw lastError;
     }
 
     watch(_uri: vscode.Uri): vscode.Disposable {
@@ -66,7 +68,10 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         try {
-            const result = await this.execWithRetry(sprite, `stat -c '%F|%s|%Y|%X' "${path}" 2>/dev/null || echo "NOTFOUND"`);
+            // Use test + stat to avoid errors on missing files
+            const result = await this.safeExec(sprite,
+                `if [ -e "${path}" ]; then stat -c '%F|%s|%Y|%X' "${path}"; else echo "NOTFOUND"; fi`
+            );
             const output = result.stdout.trim();
 
             if (output === 'NOTFOUND' || !output) {
@@ -102,7 +107,7 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         try {
-            const result = await this.execWithRetry(sprite, `ls -1Ap "${path}" 2>/dev/null`);
+            const result = await this.safeExec(sprite, `ls -1Ap "${path}" 2>/dev/null || true`);
             const output = result.stdout.trim();
 
             if (!output) {
@@ -147,15 +152,19 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         try {
-            const result = await this.execWithRetry(sprite, `base64 "${path}" 2>/dev/null`);
+            // First check if file exists
+            const checkResult = await this.safeExec(sprite, `test -f "${path}" && echo EXISTS || echo NOTFOUND`);
+            if (checkResult.stdout.trim() !== 'EXISTS') {
+                throw vscode.FileSystemError.FileNotFound(uri);
+            }
+
+            // Read file content
+            const result = await this.safeExec(sprite, `base64 "${path}"`);
             const base64Content = result.stdout.replace(/\s/g, '');
 
             if (!base64Content) {
-                const checkResult = await this.execWithRetry(sprite, `test -f "${path}" && echo EXISTS`);
-                if (checkResult.stdout.trim() === 'EXISTS') {
-                    return new Uint8Array(0);
-                }
-                throw vscode.FileSystemError.FileNotFound(uri);
+                // Empty file
+                return new Uint8Array(0);
             }
 
             const binaryString = atob(base64Content);
@@ -178,7 +187,7 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         try {
-            const existsResult = await this.execWithRetry(sprite, `test -e "${path}" && echo EXISTS || echo NOTEXISTS`);
+            const existsResult = await this.safeExec(sprite, `test -e "${path}" && echo EXISTS || echo NOTEXISTS`);
             const exists = existsResult.stdout.trim() === 'EXISTS';
 
             if (exists && !options.overwrite) {
@@ -189,10 +198,10 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
             }
 
             const parentDir = path.substring(0, path.lastIndexOf('/')) || '/';
-            await this.execWithRetry(sprite, `mkdir -p "${parentDir}"`);
+            await this.safeExec(sprite, `mkdir -p "${parentDir}"`);
 
             const base64Content = Buffer.from(content).toString('base64');
-            await this.execWithRetry(sprite, `echo "${base64Content}" | base64 -d > "${path}"`);
+            await this.safeExec(sprite, `echo "${base64Content}" | base64 -d > "${path}"`);
 
             this._emitter.fire([{
                 type: exists ? vscode.FileChangeType.Changed : vscode.FileChangeType.Created,
@@ -212,9 +221,9 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         try {
-            const result = await this.execWithRetry(sprite, `mkdir -p "${path}"`);
-            if (result.stderr && result.stderr.includes('error')) {
-                throw new Error(result.stderr);
+            const result = await this.safeExec(sprite, `mkdir -p "${path}"`);
+            if (result.exitCode !== 0) {
+                throw new Error(result.stderr || 'mkdir failed');
             }
 
             this._emitter.fire([{ type: vscode.FileChangeType.Created, uri }]);
@@ -230,7 +239,7 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
 
         try {
             const flags = options.recursive ? '-rf' : '-f';
-            await this.execWithRetry(sprite, `rm ${flags} "${path}"`);
+            await this.safeExec(sprite, `rm ${flags} "${path}"`);
 
             this._emitter.fire([{ type: vscode.FileChangeType.Deleted, uri }]);
         } catch (error: any) {
@@ -251,13 +260,13 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
 
         try {
             if (!options.overwrite) {
-                const existsResult = await this.execWithRetry(sprite, `test -e "${newPath}" && echo EXISTS`);
+                const existsResult = await this.safeExec(sprite, `test -e "${newPath}" && echo EXISTS || echo NOTEXISTS`);
                 if (existsResult.stdout.trim() === 'EXISTS') {
                     throw vscode.FileSystemError.FileExists(newUri);
                 }
             }
 
-            await this.execWithRetry(sprite, `mv "${oldPath}" "${newPath}"`);
+            await this.safeExec(sprite, `mv "${oldPath}" "${newPath}"`);
 
             this._emitter.fire([
                 { type: vscode.FileChangeType.Deleted, uri: oldUri },
