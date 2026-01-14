@@ -2,15 +2,14 @@
   "name": "vscode-sprite",
   "displayName": "Sprite",
   "description": "Browse and edit files on Sprites.dev sandboxes directly from VS Code",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "sprite",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": ["Other"],
   "activationEvents": [
-    "onStartupFinished",
-    "onFileSystem:sprite"
+    "*"
   ],
   "main": "./out/extension.js",
   "contributes": {

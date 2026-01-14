@@ -1,29 +1,25 @@
 import * as vscode from 'vscode';
-import { SpritesClient } from '@fly/sprites';
-import { SpriteFileSystemProvider } from './spriteFileSystem';
 
-let globalClient: SpritesClient | null = null;
-let spriteFs: SpriteFileSystemProvider;
+let SpritesClient: any;
+let globalClient: any = null;
+let spriteFs: any;
+
+async function loadSDK() {
+    if (!SpritesClient) {
+        try {
+            const sdk = await import('@fly/sprites');
+            SpritesClient = sdk.SpritesClient;
+            const { SpriteFileSystemProvider } = await import('./spriteFileSystem');
+            spriteFs = new SpriteFileSystemProvider();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to load Sprites SDK: ${error.message}`);
+            throw error;
+        }
+    }
+}
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Sprite extension is now active');
-
-    // Create and register the filesystem provider
-    spriteFs = new SpriteFileSystemProvider();
-    context.subscriptions.push(
-        vscode.workspace.registerFileSystemProvider('sprite', spriteFs, {
-            isCaseSensitive: true,
-            isReadonly: false
-        })
-    );
-
-    // Initialize client if token exists in secrets
-    context.secrets.get('spriteToken').then(token => {
-        if (token) {
-            globalClient = new SpritesClient(token);
-            spriteFs.setClient(globalClient);
-        }
-    });
 
     // Command: Set API Token
     const setToken = vscode.commands.registerCommand('sprite.setToken', async () => {
@@ -35,9 +31,23 @@ export function activate(context: vscode.ExtensionContext) {
 
         if (token) {
             await context.secrets.store('spriteToken', token);
-            globalClient = new SpritesClient(token);
-            spriteFs.setClient(globalClient);
-            vscode.window.showInformationMessage('Sprite API token saved');
+            try {
+                await loadSDK();
+                globalClient = new SpritesClient(token);
+                spriteFs.setClient(globalClient);
+
+                // Register filesystem provider if not already
+                context.subscriptions.push(
+                    vscode.workspace.registerFileSystemProvider('sprite', spriteFs, {
+                        isCaseSensitive: true,
+                        isReadonly: false
+                    })
+                );
+
+                vscode.window.showInformationMessage('Sprite API token saved');
+            } catch (error: any) {
+                vscode.window.showErrorMessage(`Error: ${error.message}`);
+            }
         }
     });
 
@@ -55,7 +65,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         try {
-            // Fetch list of sprites
             const sprites = await globalClient.listAllSprites();
 
             if (sprites.length === 0) {
@@ -69,8 +78,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            // Let user select a sprite
-            const items = sprites.map(s => ({
+            const items: Array<{label: string; description: string; sprite: any}> = sprites.map((s: any) => ({
                 label: s.name,
                 description: s.status || '',
                 sprite: s
@@ -84,7 +92,6 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            // Ask for the path to open (default to home directory)
             const path = await vscode.window.showInputBox({
                 prompt: 'Enter path to open',
                 value: '/home/sprite',
@@ -95,10 +102,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            // Create URI and add as workspace folder
             const uri = vscode.Uri.parse(`sprite://${selected.sprite.name}${path}`);
-
-            // Add to workspace
             const workspaceFolders = vscode.workspace.workspaceFolders || [];
             vscode.workspace.updateWorkspaceFolders(
                 workspaceFolders.length,
@@ -134,7 +138,7 @@ export function activate(context: vscode.ExtensionContext) {
                 title: `Creating sprite: ${name}`,
                 cancellable: false
             }, async () => {
-                await globalClient!.createSprite(name);
+                await globalClient.createSprite(name);
             });
 
             const open = await vscode.window.showInformationMessage(
@@ -163,7 +167,6 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        // Get sprite from current file or ask user
         let spriteName: string | undefined;
 
         const activeUri = vscode.window.activeTextEditor?.document.uri;
@@ -178,7 +181,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            const items = sprites.map(s => ({ label: s.name, sprite: s }));
+            const items: Array<{label: string; sprite: any}> = sprites.map((s: any) => ({ label: s.name, sprite: s }));
             const selected = await vscode.window.showQuickPick(items, {
                 placeHolder: 'Select sprite for terminal'
             });
@@ -191,7 +194,6 @@ export function activate(context: vscode.ExtensionContext) {
 
         const sprite = globalClient.sprite(spriteName);
 
-        // Create pseudo-terminal
         const writeEmitter = new vscode.EventEmitter<string>();
         let shellCmd: any;
 
@@ -260,7 +262,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            const items = sprites.map(s => ({ label: s.name, sprite: s }));
+            const items: Array<{label: string; sprite: any}> = sprites.map((s: any) => ({ label: s.name, sprite: s }));
             const selected = await vscode.window.showQuickPick(items, {
                 placeHolder: 'Select sprite to delete'
             });
@@ -278,10 +280,9 @@ export function activate(context: vscode.ExtensionContext) {
             if (confirm === 'Delete') {
                 await globalClient.deleteSprite(selected.sprite.name);
 
-                // Remove from workspace if present
                 const workspaceFolders = vscode.workspace.workspaceFolders || [];
                 const index = workspaceFolders.findIndex(
-                    f => f.uri.scheme === 'sprite' && f.uri.authority === selected.sprite.name
+                    (f: vscode.WorkspaceFolder) => f.uri.scheme === 'sprite' && f.uri.authority === selected.sprite.name
                 );
                 if (index !== -1) {
                     vscode.workspace.updateWorkspaceFolders(index, 1);
@@ -294,9 +295,8 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // Command: Refresh Sprite (re-read filesystem)
+    // Command: Refresh
     const refreshSprite = vscode.commands.registerCommand('sprite.refresh', async () => {
-        // Trigger a refresh of the explorer
         vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
     });
 
@@ -308,6 +308,25 @@ export function activate(context: vscode.ExtensionContext) {
         deleteSprite,
         refreshSprite
     );
+
+    // Try to restore token on startup
+    context.secrets.get('spriteToken').then(async token => {
+        if (token) {
+            try {
+                await loadSDK();
+                globalClient = new SpritesClient(token);
+                spriteFs.setClient(globalClient);
+                context.subscriptions.push(
+                    vscode.workspace.registerFileSystemProvider('sprite', spriteFs, {
+                        isCaseSensitive: true,
+                        isReadonly: false
+                    })
+                );
+            } catch (e) {
+                // SDK load failed, user will need to set token again
+            }
+        }
+    });
 }
 
 export function deactivate() {}
