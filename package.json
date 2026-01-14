@@ -2,7 +2,7 @@
   "name": "vscode-sprite",
   "displayName": "Sprite",
   "description": "Browse and edit files on Sprites.dev sandboxes directly from VS Code",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "publisher": "sprite",
   "engines": {
     "vscode": "^1.85.0"

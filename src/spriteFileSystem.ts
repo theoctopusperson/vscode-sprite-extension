@@ -31,6 +31,23 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         }
     }
 
+    // Test exec on a sprite to debug connection issues
+    async testExec(spriteName: string): Promise<void> {
+        const sprite = this.getSprite(spriteName);
+        if (!sprite) {
+            console.log('Sprite test: no sprite');
+            return;
+        }
+        try {
+            console.log('Sprite test: calling exec with "echo hello"');
+            const result = await sprite.exec('echo hello');
+            console.log(`Sprite test: success - stdout="${toStr(result.stdout)}", stderr="${toStr(result.stderr)}"`);
+        } catch (error: any) {
+            console.log(`Sprite test: error - ${error.message}`);
+            console.log(`Sprite test: error object - ${JSON.stringify(error, null, 2)}`);
+        }
+    }
+
     // Wait for client to be ready (with timeout)
     private async waitForClient(timeoutMs: number = 5000): Promise<boolean> {
         if (this.client) return true;
@@ -75,12 +92,13 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
                 exitCode: 0
             };
         } catch (error: any) {
-            console.log(`Sprite safeExec: error - ${error.message}`);
+            const stderr = error.stderr ? toStr(error.stderr) : '';
+            console.log(`Sprite safeExec: error - ${error.message}, stderr="${stderr}", exitCode=${error.exitCode}`);
             // Check if error has stdout/stderr (exec failed but returned output)
             if (error.stdout !== undefined || error.stderr !== undefined) {
                 return {
                     stdout: error.stdout ? toStr(error.stdout) : '',
-                    stderr: error.stderr ? toStr(error.stderr) : '',
+                    stderr: stderr,
                     exitCode: error.exitCode || 1
                 };
             }
