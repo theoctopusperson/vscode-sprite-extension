@@ -31,14 +31,33 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
     }
 
     private parseUri(uri: vscode.Uri): { spriteName: string; path: string } {
-        // URI format: sprite://sprite-name/path/to/file
         const spriteName = uri.authority;
         const path = uri.path || '/';
         return { spriteName, path };
     }
 
+    private async execWithRetry(sprite: Sprite, command: string, retries = 2): Promise<{stdout: string; stderr: string}> {
+        let lastError: any;
+        for (let i = 0; i <= retries; i++) {
+            try {
+                const result = await sprite.exec(command);
+                return {
+                    stdout: toStr(result.stdout),
+                    stderr: toStr(result.stderr)
+                };
+            } catch (error: any) {
+                lastError = error;
+                console.error(`Sprite exec attempt ${i + 1} failed:`, error.message);
+                if (i < retries) {
+                    // Wait a bit before retrying
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+            }
+        }
+        throw lastError;
+    }
+
     watch(_uri: vscode.Uri): vscode.Disposable {
-        // File watching not implemented - would require persistent connection
         return new vscode.Disposable(() => {});
     }
 
@@ -47,9 +66,8 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         try {
-            // Use stat command to get file info
-            const result = await sprite.exec(`stat -c '%F|%s|%Y|%X' "${path}" 2>/dev/null || echo "NOTFOUND"`);
-            const output = toStr(result.stdout).trim();
+            const result = await this.execWithRetry(sprite, `stat -c '%F|%s|%Y|%X' "${path}" 2>/dev/null || echo "NOTFOUND"`);
+            const output = result.stdout.trim();
 
             if (output === 'NOTFOUND' || !output) {
                 throw vscode.FileSystemError.FileNotFound(uri);
@@ -74,7 +92,8 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
             if (error instanceof vscode.FileSystemError) {
                 throw error;
             }
-            throw vscode.FileSystemError.Unavailable(error.message);
+            console.error(`stat failed for ${uri.toString()}:`, error);
+            throw vscode.FileSystemError.Unavailable(`Failed to stat ${path}: ${error.message}`);
         }
     }
 
@@ -83,9 +102,8 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         try {
-            // List files with type indicator
-            const result = await sprite.exec(`ls -1ApL "${path}" 2>/dev/null`);
-            const output = toStr(result.stdout).trim();
+            const result = await this.execWithRetry(sprite, `ls -1Ap "${path}" 2>/dev/null`);
+            const output = result.stdout.trim();
 
             if (!output) {
                 return [];
@@ -119,7 +137,8 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
 
             return entries;
         } catch (error: any) {
-            throw vscode.FileSystemError.Unavailable(error.message);
+            console.error(`readDirectory failed for ${uri.toString()}:`, error);
+            throw vscode.FileSystemError.Unavailable(`Failed to list ${path}: ${error.message}`);
         }
     }
 
@@ -128,14 +147,12 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         try {
-            // Use base64 to safely handle binary files
-            const result = await sprite.exec(`base64 "${path}" 2>/dev/null`);
-            const base64Content = toStr(result.stdout).replace(/\s/g, '');
+            const result = await this.execWithRetry(sprite, `base64 "${path}" 2>/dev/null`);
+            const base64Content = result.stdout.replace(/\s/g, '');
 
             if (!base64Content) {
-                // Try reading as empty file
-                const checkResult = await sprite.exec(`test -f "${path}" && echo EXISTS`);
-                if (toStr(checkResult.stdout).trim() === 'EXISTS') {
+                const checkResult = await this.execWithRetry(sprite, `test -f "${path}" && echo EXISTS`);
+                if (checkResult.stdout.trim() === 'EXISTS') {
                     return new Uint8Array(0);
                 }
                 throw vscode.FileSystemError.FileNotFound(uri);
@@ -151,7 +168,8 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
             if (error instanceof vscode.FileSystemError) {
                 throw error;
             }
-            throw vscode.FileSystemError.Unavailable(error.message);
+            console.error(`readFile failed for ${uri.toString()}:`, error);
+            throw vscode.FileSystemError.Unavailable(`Failed to read ${path}: ${error.message}`);
         }
     }
 
@@ -160,9 +178,8 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         try {
-            // Check if file exists
-            const existsResult = await sprite.exec(`test -e "${path}" && echo EXISTS || echo NOTEXISTS`);
-            const exists = toStr(existsResult.stdout).trim() === 'EXISTS';
+            const existsResult = await this.execWithRetry(sprite, `test -e "${path}" && echo EXISTS || echo NOTEXISTS`);
+            const exists = existsResult.stdout.trim() === 'EXISTS';
 
             if (exists && !options.overwrite) {
                 throw vscode.FileSystemError.FileExists(uri);
@@ -171,13 +188,11 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
                 throw vscode.FileSystemError.FileNotFound(uri);
             }
 
-            // Ensure parent directory exists
             const parentDir = path.substring(0, path.lastIndexOf('/')) || '/';
-            await sprite.exec(`mkdir -p "${parentDir}"`);
+            await this.execWithRetry(sprite, `mkdir -p "${parentDir}"`);
 
-            // Write file using base64 to handle binary content safely
             const base64Content = Buffer.from(content).toString('base64');
-            await sprite.exec(`echo "${base64Content}" | base64 -d > "${path}"`);
+            await this.execWithRetry(sprite, `echo "${base64Content}" | base64 -d > "${path}"`);
 
             this._emitter.fire([{
                 type: exists ? vscode.FileChangeType.Changed : vscode.FileChangeType.Created,
@@ -187,7 +202,8 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
             if (error instanceof vscode.FileSystemError) {
                 throw error;
             }
-            throw vscode.FileSystemError.Unavailable(error.message);
+            console.error(`writeFile failed for ${uri.toString()}:`, error);
+            throw vscode.FileSystemError.Unavailable(`Failed to write ${path}: ${error.message}`);
         }
     }
 
@@ -196,14 +212,15 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         try {
-            const result = await sprite.exec(`mkdir -p "${path}"`);
-            if (result.stderr && toStr(result.stderr).includes('error')) {
-                throw new Error(toStr(result.stderr));
+            const result = await this.execWithRetry(sprite, `mkdir -p "${path}"`);
+            if (result.stderr && result.stderr.includes('error')) {
+                throw new Error(result.stderr);
             }
 
             this._emitter.fire([{ type: vscode.FileChangeType.Created, uri }]);
         } catch (error: any) {
-            throw vscode.FileSystemError.Unavailable(error.message);
+            console.error(`createDirectory failed for ${uri.toString()}:`, error);
+            throw vscode.FileSystemError.Unavailable(`Failed to create ${path}: ${error.message}`);
         }
     }
 
@@ -213,11 +230,12 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
 
         try {
             const flags = options.recursive ? '-rf' : '-f';
-            await sprite.exec(`rm ${flags} "${path}"`);
+            await this.execWithRetry(sprite, `rm ${flags} "${path}"`);
 
             this._emitter.fire([{ type: vscode.FileChangeType.Deleted, uri }]);
         } catch (error: any) {
-            throw vscode.FileSystemError.Unavailable(error.message);
+            console.error(`delete failed for ${uri.toString()}:`, error);
+            throw vscode.FileSystemError.Unavailable(`Failed to delete ${path}: ${error.message}`);
         }
     }
 
@@ -233,13 +251,13 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
 
         try {
             if (!options.overwrite) {
-                const existsResult = await sprite.exec(`test -e "${newPath}" && echo EXISTS`);
-                if (toStr(existsResult.stdout).trim() === 'EXISTS') {
+                const existsResult = await this.execWithRetry(sprite, `test -e "${newPath}" && echo EXISTS`);
+                if (existsResult.stdout.trim() === 'EXISTS') {
                     throw vscode.FileSystemError.FileExists(newUri);
                 }
             }
 
-            await sprite.exec(`mv "${oldPath}" "${newPath}"`);
+            await this.execWithRetry(sprite, `mv "${oldPath}" "${newPath}"`);
 
             this._emitter.fire([
                 { type: vscode.FileChangeType.Deleted, uri: oldUri },
@@ -249,7 +267,8 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
             if (error instanceof vscode.FileSystemError) {
                 throw error;
             }
-            throw vscode.FileSystemError.Unavailable(error.message);
+            console.error(`rename failed:`, error);
+            throw vscode.FileSystemError.Unavailable(`Failed to rename: ${error.message}`);
         }
     }
 }
