@@ -6,7 +6,7 @@
   "publisher": "sprite",
   "repository": {
     "type": "git",
-    "url": "https://github.com/theoctopusperson/vscode-sprite-extension"
+    "url": "https://github.com/theoctopusperson/sprites-vscode-ext"
   },
   "engines": {
     "vscode": "^1.85.0"
