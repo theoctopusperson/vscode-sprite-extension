@@ -1,0 +1,64 @@
+{
+  "name": "vscode-sprite",
+  "displayName": "Sprite Extension",
+  "description": "Manage and interact with Sprites from VS Code",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onCommand:sprite.listSprites"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sprite.listSprites",
+        "title": "Sprite: List Sprites"
+      },
+      {
+        "command": "sprite.createSprite",
+        "title": "Sprite: Create Sprite"
+      },
+      {
+        "command": "sprite.execCommand",
+        "title": "Sprite: Execute Command"
+      },
+      {
+        "command": "sprite.deleteSprite",
+        "title": "Sprite: Delete Sprite"
+      },
+      {
+        "command": "sprite.setToken",
+        "title": "Sprite: Set API Token"
+      },
+      {
+        "command": "sprite.openTerminal",
+        "title": "Sprite: Open Terminal"
+      }
+    ],
+    "configuration": {
+      "title": "Sprite",
+      "properties": {
+        "sprite.apiToken": {
+          "type": "string",
+          "default": "",
+          "description": "Sprites.dev API token"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@fly/sprites": "^0.0.1"
+  }
+}
